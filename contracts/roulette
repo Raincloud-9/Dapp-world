@@ -1,0 +1,156 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+error NotEnoughEther();
+error InsufficientTokens();
+error InvalidNumber();
+error WheelHasNotBeenSpun();
+
+contract RouletteCoin is ERC20, ERC20Burnable, Ownable {
+    uint256 private constant TOKENS_PER_ETHER = 1000;
+    uint256 private spinWheelResult;
+    bool private wheelHasBeenSpun = false;
+
+    struct Bet {
+        address bettor;
+        uint amount;
+    }
+
+    Bet[] private evenBets;
+    Bet[] private oddBets;
+    mapping(uint => Bet[]) private specificNumberBets;
+
+    constructor() ERC20("RouletteCoin", "RTC") Ownable(msg.sender) {}
+
+    // Buy tokens with Ether
+    function buyTokens() external payable {
+        if (msg.value == 0) revert NotEnoughEther();
+        uint256 tokens = (msg.value * TOKENS_PER_ETHER) / 1 ether;
+        _mint(msg.sender, tokens);
+    }
+
+    // Sell tokens for Ether
+    function sellTokens(uint tokenAmount) external {
+        if (balanceOf(msg.sender) < tokenAmount) revert InsufficientTokens();
+        uint256 etherAmount = (tokenAmount / TOKENS_PER_ETHER) * 1 ether;
+        _burn(msg.sender, tokenAmount);
+        payable(msg.sender).transfer(etherAmount);
+    }
+
+    // Place bet on even
+    function placeBetEven(uint betAmount) external {
+        if (balanceOf(msg.sender) < betAmount) revert InsufficientTokens();
+        evenBets.push(Bet(msg.sender, betAmount));
+        _burn(msg.sender, betAmount);
+    }
+
+    // Place bet on odd
+    function placeBetOdd(uint betAmount) external {
+        if (balanceOf(msg.sender) < betAmount) revert InsufficientTokens();
+        oddBets.push(Bet(msg.sender, betAmount));
+        _burn(msg.sender, betAmount);
+    }
+
+    // Place bet on a specific number
+    function placeBetOnNumber(uint betAmount, uint number) external {
+        if (balanceOf(msg.sender) < betAmount) revert InsufficientTokens();
+        if (number > 36) revert InvalidNumber();
+        specificNumberBets[number].push(Bet(msg.sender, betAmount));
+        _burn(msg.sender, betAmount);
+    }
+
+    // Spin the wheel
+    function spinWheel() external onlyOwner {
+        spinWheelResult = uint(keccak256(abi.encodePacked(block.timestamp %block.number))) % 37;
+        wheelHasBeenSpun = true;
+    }
+
+    // Transfer winnings to players
+    function transferWinnings() external onlyOwner {
+        if(!wheelHasBeenSpun) revert WheelHasNotBeenSpun();
+
+        // Process specific number bets
+        uint length = specificNumberBets[spinWheelResult].length;
+        for(uint i = 0; i < length; i++){
+            Bet memory bet = specificNumberBets[spinWheelResult][i];
+            uint reward = bet.amount * 19;
+            _mint(bet.bettor, reward);
+        }
+
+        // Process even/odd bets
+        processEvenOddBets(evenBets, spinWheelResult % 2 == 0);
+        processEvenOddBets(oddBets, spinWheelResult % 2 != 0);
+
+        resetBets();
+    }
+
+    // Check balance of ERC20 tokens for a player
+    function checkBalance() external view returns (uint) {
+        return balanceOf(msg.sender);
+    }
+
+    // Check the winning number after the roulette wheel has been spun
+    function checkWinningNumber() external view returns (uint) {
+        return spinWheelResult;
+    }
+
+    // Check bets on Even
+    function checkBetsOnEven() external view returns (address[] memory, uint[] memory) {
+        uint length = evenBets.length;
+        address[] memory addresses = new address[](length);
+        uint[] memory amounts = new uint[](length);
+        for (uint i = 0; i < length; i++) {
+            addresses[i] = evenBets[i].bettor;
+            amounts[i] = evenBets[i].amount;
+        }
+        return (addresses, amounts);
+    }
+
+    // Check bets on Odd
+    function checkBetsOnOdd() external view returns (address[] memory, uint[] memory) {
+        uint length = oddBets.length;
+        address[] memory addresses = new address[](length);
+        uint[] memory amounts = new uint[](length);
+        for (uint i = 0; i < length; i++) {
+            addresses[i] = oddBets[i].bettor;
+            amounts[i] = oddBets[i].amount;
+        }
+        return (addresses, amounts);
+    }
+
+    // Check bets on a specific number
+    function checkBetsOnDigits(uint number) external view returns (address[] memory, uint[] memory) {
+        uint length = specificNumberBets[number].length;
+        address[] memory addresses = new address[](length);
+        uint[] memory amounts = new uint[](length);
+        for (uint i = 0; i < length; i++) {
+            addresses[i] = specificNumberBets[number][i].bettor;
+            amounts[i] = specificNumberBets[number][i].amount;
+        }
+        return (addresses, amounts);
+    }
+
+    // Reset bets
+    function resetBets() private {
+        delete evenBets;
+        delete oddBets;
+        for(uint i = 0; i <= 36; i++) {
+            delete specificNumberBets[i];
+        }
+    }
+
+    // Function to process even/odd bets
+    function processEvenOddBets(Bet[] storage bets, bool condition) private {
+        uint length = bets.length;
+        if (condition) {
+            for(uint i = 0; i < length; i++){
+                uint reward = (bets[i].amount * 18) / 10;
+                _mint(bets[i].bettor, reward);
+            }
+        }
+    }
+}
